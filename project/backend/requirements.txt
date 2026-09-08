@@ -1,0 +1,19 @@
+# --- Day 1: API + DB foundation ---
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.9
+sqlalchemy==2.0.35
+psycopg2-binary==2.9.9
+pgvector==0.3.4
+python-dotenv==1.0.1
+pydantic==2.9.2
+pydantic-settings==2.5.2
+
+# --- Will be used starting Stage 2+ (installing now saves time later) ---
+pymupdf==1.24.10
+sentence-transformers==3.1.1
+transformers==4.44.2
+torch==2.4.1
+pytest==8.3.3
+httpx==0.27.2
+numpy==1.26.4

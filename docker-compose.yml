@@ -1,0 +1,19 @@
+version: "3.9"
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: research_qa_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: research_admin
+      POSTGRES_PASSWORD: research_pass
+      POSTGRES_DB: research_qa
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./backend/database/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+
+volumes:
+  pgdata:

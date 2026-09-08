@@ -1,0 +1,122 @@
+[
+  {
+    "question": "How does ZJIT handle local variables?",
+    "expected_keywords": [
+      "SSA",
+      "local variable",
+      "memory"
+    ],
+    "full_architecture": {
+      "answer": "ZJIT handles Ruby local variables by lifting them into static single\u2011assignment (SSA) values as part of its high\u2011level intermediate representation, rather than keeping them as plain memory loads and stores. This SSA lifting enables ZJIT\u2019s optimization passes to treat locals like any other SSA value. When a method call might cause an environment escape (e.g., via eval), ZJIT writes all locals back to memory so that the interpreter can access them, and the register allocator may also keep a copy on the native stack, resulting in two copies of each local before such calls. Stack maps are planned to describe the locations of these copies.",
+      "latency_seconds": 9.37,
+      "citation_health": {
+        "total_claims": 2,
+        "valid_claims": 0,
+        "flagged_claims": 2
+      },
+      "num_claims": 2
+    },
+    "full_architecture_keyword_recall": 1.0,
+    "baseline": {
+      "answer": "**ZJIT\u2019s approach to Ruby local variables**\n\n1. **Lifting locals into SSA**  \n   - When a method is compiled, every Ruby local variable is *lifted* from the VM\u2019s frame memory into a **static\u2011single\u2011assignment (SSA) value** in ZJIT\u2019s high\u2011level intermediate representation (HIR).  \n   - This is different from other Ruby JITs, which usually keep locals as plain memory loads/stores or try to recover SSA values later by partial\u2011evaluation. By putting locals directly into SSA, ZJIT can apply the usual register\u2011allocation and optimization passes that work on SSA values.\n\n2. **Initial state and profiling**  \n   - In the interpreter a method\u2019s locals are created with an initial value of `nil`.  \n   - ZJIT gathers type information for those locals (and for every other instruction) by profiling the interpreter: after a configurable number of calls (default\u202fP\u202f=\u202f25) the bytecode is rewritten with profiling variants that record operand types in a side\u2011table. Once enough profiles are collected (default\u202fC\u202f=\u202f5 more calls), ZJIT recompiles the method using the observed types.\n\n3. **Handling possible escapes**  \n   - Ruby\u2019s `eval`, method calls that may invoke C extensions, and other meta\u2011programming features can cause a *environment escape*: the interpreter must be able to read the locals from memory.  \n   - To support this, ZJIT **writes all SSA locals back to the VM frame memory** before any instruction that might trigger an escape (e.g., a call to a method that could run `eval` or raise a longjmp\u2011based exception).  \n   - Currently ZJIT writes two copies of each local (one in a register/SSA value and one in memory) before such calls. The authors plan to replace the duplicate writes with **stack\u2011map metadata** that tells the runtime exactly where each live local resides, eliminating the extra copy.\n\n4. **Deoptimization and guards**  \n   - Because a local can hold an object of any class, ZJIT speculates on the observed types and inserts **type guards**. If a guard fails, execution *side\u2011exits* back to the interpreter, which then continues with the correct value in the VM frame.  \n   - When a method or constant that was speculated on is redefined, ZJIT places a **PatchPoint** (a no\u2011op that records the location). If redefinition occurs, the PatchPoint is patched to a side\u2011exit, again forcing the interpreter to take over and read the locals from memory.\n\n5. **Interaction with stack maps**  \n   - For every safepoint where deoptimization may be needed, ZJIT creates a **stack\u2011map** that maps the native registers/stack slots to the corresponding VM frame slots. This map is used during a deoptimization to copy the live SSA values back into the interpreter\u2019s frame so that the locals are correctly re\u2011materialized.\n\n**In short:** ZJIT lifts Ruby locals into SSA for aggressive optimization, profiles their types, writes them back to the VM frame whenever an escape is possible, and uses guards, PatchPoints, and stack\u2011map\u2011driven deoptimization to keep the interpreter\u2019s view of locals consistent when speculation fails or when meta\u2011programming changes the program\u2019s shape.",
+      "latency_seconds": 4.39
+    },
+    "baseline_keyword_recall": 1.0
+  },
+  {
+    "question": "What happens when the environment escapes?",
+    "expected_keywords": [
+      "Proc",
+      "heap",
+      "escape"
+    ],
+    "full_architecture": {
+      "answer": "When the environment escapes, the runtime copies the environment from the VM stack to a heap\u2011allocated object and updates the control\u2011frame pointer to reference this new location. The environment then becomes a first\u2011class object that any code holding a reference can read or write, making the values of local variables unpredictable for the JIT compiler. Consequently, the compiler\u2019s SSA assumptions are invalidated, and the system must fall back to the interpreter or use special patch points (e.g., NoEPEscape) to de\u2011optimise and correctly handle subsequent accesses. This escape is relatively rare in practice (observed about 35 times per web request in a benchmark).",
+      "latency_seconds": 6.67,
+      "citation_health": {
+        "total_claims": 4,
+        "valid_claims": 2,
+        "flagged_claims": 2
+      },
+      "num_claims": 4
+    },
+    "full_architecture_keyword_recall": 0.6666666666666666,
+    "baseline": {
+      "answer": "When an **environment escape** occurs the run\u2011time representation of the method\u2019s locals changes from a stack\u2011resident frame to a heap\u2011allocated object, and the JIT\u2011compiled code can no longer rely on the assumptions it made about those locals.\n\n* **Before the escape** the environment lives in the VM stack; the current frame pointer (`cfp`) contains a pointer (`cfp->ep`) that directly references that stack slot.  \n* **When a Proc (or any other construct that captures the environment) is created**, the whole environment is copied onto the garbage\u2011collector\u2011managed heap and `cfp->ep` is updated to point at the new heap object.  \n\nBecause the environment is now an object that can be accessed from arbitrary code, the compiler can no longer guarantee that the values of the locals remain unchanged after a call to code outside the current compilation unit. This breaks the SSA form that the JIT produced for those variables.\n\nTo handle the situation the system:\n\n1. **Loads the environment pointer from the frame (`cfp->ep`) for every local read/write** (the interpreter\u2019s model).  \n2. **Invalidates the SSA assumptions** \u2013 the JIT assumes locals are never mutated through an environment object; when that assumption is violated it must fall back to the interpreter.  \n3. **Triggers a side\u2011exit** via the patched `PatchPoint NoEPEscape`. The side\u2011exit transfers control back to the interpreter, where the locals are materialised in memory and any modifications made through the escaped environment are observed correctly.  \n4. **Optionally writes the current values of the locals to memory** (if the environment has not escaped) so that the interpreter sees a consistent state; if the environment has escaped, the side\u2011exit does not write because the Send may already have changed the locals.\n\nIn short, an environment escape copies the environment from the stack to the heap, updates the frame\u2019s environment pointer, invalidates the JIT\u2019s SSA view of the locals, and forces a de\u2011optimization/exit back to the interpreter so that further execution can correctly handle the now\u2011shared, mutable environment.",
+      "latency_seconds": 11.19
+    },
+    "baseline_keyword_recall": 1.0
+  },
+  {
+    "question": "How does ZJIT differ from YJIT?",
+    "expected_keywords": [
+      "basic block",
+      "method",
+      "whole method"
+    ],
+    "full_architecture": {
+      "answer": "ZJIT differs from YJIT in several architectural and optimization aspects. ZJIT compiles an entire method (and any inlined callees) at once, using a static single\u2011assignment (SSA) intermediate representation and multiple global and local optimization passes, whereas YJIT compiles one basic block at a time with lazy basic\u2011block versioning and limited cross\u2011block optimizations. ZJIT lifts local variables to SSA values and avoids flushing and re\u2011loading them from the VM frame, while YJIT flushes and reloads locals from the frame. For method calls, ZJIT writes only a single pointer to de\u2011optimization metadata and skips some VM frame fields, making those calls faster than YJIT, which lacks this optimization. ZJIT also currently lacks support for specializing complex argument\u2011passing features such as array splat arguments, contributing to a slight performance gap with YJIT. Finally, YJIT learns type information by interleaving compilation and execution of basic blocks, whereas ZJIT must profile the method beforehand and gather type information from the interpreter before compiling the whole method.",
+      "latency_seconds": 29.58,
+      "citation_health": {
+        "total_claims": 6,
+        "valid_claims": 3,
+        "flagged_claims": 3
+      },
+      "num_claims": 6
+    },
+    "full_architecture_keyword_recall": 1.0,
+    "baseline": {
+      "answer": "**ZJIT vs. YJIT**\n\n| Aspect | ZJIT | YJIT |\n|--------|------|------|\n| **Compilation granularity** | Compiles an entire **method** (and any inlined callees) in one pass. | Compiles **one basic block at a time** using lazy basic\u2011block versioning (LBBV). |\n| **Intermediate representation** | Uses a high\u2011level SSA (static single\u2011assignment) IR; local variables are **lifted into SSA values**. | Works directly on bytecode; locals stay as memory loads/stores and are flushed/re\u2011loaded from the VM frame. |\n| **Optimization passes** | Has multiple **global and local optimization passes** (e.g., dead\u2011code elimination, constant folding, redundant\u2011type\u2011check removal). | Performs only the optimizations that can be expressed in the per\u2011block Context; cross\u2011block optimizations are limited. |\n| **Type information** | Obtains type information from **profiling** (rewriting bytecode with profiling variants) and from the interpreter before the whole method is compiled. | Learns types **lazily** at block\u2011execution time; the Context does not record actual operand values, making cross\u2011block optimizations harder. |\n| **Local\u2011variable handling** | Lifts locals to SSA, speculates their values, and uses de\u2011optimization guards to recover when speculation is wrong. | Flushes locals to the VM frame and reloads them; no SSA lifting, so each access goes through memory. |\n| **Safepoint handling** | Writes only a single pointer to de\u2011optimization metadata at method calls and skips many VM\u2011frame fields, making calls faster. | Writes more frame fields and does not have the same call\u2011site optimization, so method calls are slower than in ZJIT. |\n| **Support for complex argument passing** | Currently **lacks** specialization for features like array splat arguments, so those calls fall back to the interpreter\u2019s C functions. | YJIT already handles many of these cases (though the paper notes ZJIT\u2019s gap). |\n| **Performance** | Comparable to YJIT on real\u2011world workloads (e.g.,\u202ferubi\u2011rails, railsbench) but slightly behind because of the missing argument\u2011specialization. | Slightly faster on some benchmarks (e.g.,\u202f30k_methods) due to better handling of method\u2011call safepoints and argument passing. |\n| **Design goal** | Traditional SSA\u2011based compiler that is easier for external contributors to extend. | Minimal, low\u2011overhead JIT that interleaves compilation with execution. |\n\n**In short:** ZJIT is a method\u2011level, SSA\u2011based JIT that performs richer, whole\u2011method optimizations and treats locals as SSA values, while YJIT is a lightweight, per\u2011basic\u2011block JIT that relies on lazy versioning and keeps locals in the VM frame. This architectural shift gives ZJIT more optimization power but also introduces some current performance gaps (e.g., handling of complex argument passing).",
+      "latency_seconds": 11.62
+    },
+    "baseline_keyword_recall": 1.0
+  },
+  {
+    "question": "What is a PatchPoint used for?",
+    "expected_keywords": [
+      "redefin",
+      "side-exit",
+      "side exit"
+    ],
+    "full_architecture": {
+      "answer": "A PatchPoint is a no\u2011op instruction inserted by the JIT compiler to mark locations where it has made speculative assumptions (such as a method or constant not being redefined). The PatchPoint records the address of that location so that, if the assumed method or constant is later redefined, the JIT can rewrite the PatchPoint to side\u2011exit code that transfers execution back to the interpreter. Thus PatchPoints enable the JIT to de\u2011optimize safely by patching compiled code when its assumptions become invalid.",
+      "latency_seconds": 24.6,
+      "citation_health": {
+        "total_claims": 1,
+        "valid_claims": 1,
+        "flagged_claims": 0
+      },
+      "num_claims": 1
+    },
+    "full_architecture_keyword_recall": 0.3333333333333333,
+    "baseline": {
+      "answer": "A **PatchPoint** is a special no\u2011op instruction that the JIT inserts at places where it makes a speculative assumption\u2014typically that a method or constant will not be redefined.  \nThe instruction itself does nothing at run time; it only records the address of that spot in the generated code. If the assumed method or constant is later redefined, the JIT rewrites the PatchPoint to a **side\u2011exit** stub that transfers control back to the interpreter (or to a de\u2011optimization path).  \n\nThus a PatchPoint is used to:\n\n* Mark speculative calls/look\u2011ups without paying the cost of a runtime check.  \n* Enable fast \u201cpatch\u2011on\u2011change\u201d \u2013 when the speculation is invalidated, the recorded location can be patched to a side\u2011exit that de\u2011optimizes and later recompiles the method.  \n\nIn short, a PatchPoint is a placeholder that allows the JIT to later patch compiled code to a safe exit when a method or constant changes.",
+      "latency_seconds": 23.3
+    },
+    "baseline_keyword_recall": 0.3333333333333333
+  },
+  {
+    "question": "How does ZJIT's performance compare to other Ruby implementations?",
+    "expected_keywords": [
+      "TruffleRuby",
+      "JRuby",
+      "benchmark"
+    ],
+    "full_architecture": {
+      "answer": "The evaluation shows that ZJIT\u2019s performance is generally comparable to other modern Ruby implementations. On the 30k_variables benchmark, ZJIT matches TruffleRuby\u2019s speed with low variance. For method\u2011call intensive code (30k_methods), ZJIT is faster than YJIT because it writes fewer deoptimization metadata fields. On real\u2011world Rails workloads (erubi\u2011rails and railsbench), ZJIT\u2019s speed is similar to YJIT\u2019s but trails it slightly. Overall, ZJIT is slower than TruffleRuby due to some eagerly written frame fields, but it remains competitive with YJIT across the tested benchmarks.",
+      "latency_seconds": 26.04,
+      "citation_health": {
+        "total_claims": 5,
+        "valid_claims": 3,
+        "flagged_claims": 2
+      },
+      "num_claims": 5
+    },
+    "full_architecture_keyword_recall": 0.6666666666666666,
+    "baseline": {
+      "answer": "**In short, ZJIT is competitive with the other major Ruby runtimes, but it is not uniformly the fastest.**  \n\n| Benchmark / workload | Relative speed (lower\u202f=\u202fbetter) | How ZJIT compares |\n|----------------------|----------------------------------|-------------------|\n| **30k_variables** (a micro\u2011benchmark that stresses local\u2011variable copies) | \u2248\u202f1\u202f\u00d7\u202fCRuby (same as TruffleRuby, with low variance) | ZJIT lifts locals into SSA, so variable\u2011to\u2011variable copies cost virtually nothing. It matches TruffleRuby\u2019s performance and is noticeably faster than YJIT and JRuby on this test. |\n| **30k_methods** (30\u202f000 tiny method calls) | Slightly slower than TruffleRuby, slower than YJIT | ZJIT writes some VM\u2011frame fields eagerly and does not have YJIT\u2019s \u201csingle\u2011pointer de\u2011optimization metadata\u201d optimisation for safepoint method calls, so method\u2011call overhead is higher. |\n| **erubi\u2011rails** and **railsbench** (real\u2011world Rails\u2011based workloads) | Comparable to YJIT, but a little behind both YJIT and TruffleRuby | On full\u2011stack applications ZJIT\u2019s overall throughput is close to YJIT\u2019s, yet it still trails the best\u2011performing runtimes (TruffleRuby and YJIT) because it lacks support for specializing certain complex argument\u2011passing patterns (e.g., array splat arguments). |\n| **Overall (Figure\u202f2)** | Mean time per iteration is plotted relative to CRuby; ZJIT sits between YJIT and TruffleRuby, generally better than JRuby but not the fastest. | The paper\u2019s Figure\u202f2 shows ZJIT\u2019s average iteration time lower than CRuby and JRuby, roughly on par with YJIT on many tests, and only a modest margin slower than TruffleRuby on the method\u2011call heavy benchmark. |\n\n**Key reasons for the observed differences**\n\n* **Local\u2011variable handling:** By lifting locals into SSA, ZJIT eliminates most memory loads/stores, giving it a big advantage on the 30k_variables benchmark (matching TruffleRuby).  \n* **Method\u2011call overhead:** ZJIT still writes some frame fields eagerly and does not use the single\u2011pointer de\u2011optimization metadata that YJIT employs, making method calls slower than YJIT and TruffleRuby.  \n* **Complex argument passing:** ZJIT currently cannot specialize array\u2011splat and other \u201ccomplex\u201d argument forms, forcing those calls to fall back to the interpreter\u2019s C functions. This accounts for the small performance gap on the Rails workloads.  \n\n**Bottom line:** ZJIT delivers performance that is on par with the best existing Ruby JITs for code that heavily uses local variables, and it is competitive (though slightly slower) on method\u2011call\u2011intensive and real\u2011world Rails workloads. It consistently outperforms JRuby and the baseline CRuby, but it still trails the very fastest runtimes (TruffleRuby and YJIT) in a few scenarios.",
+      "latency_seconds": 11.55
+    },
+    "baseline_keyword_recall": 1.0
+  }
+]

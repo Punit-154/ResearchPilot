@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Research QA System</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<div class="app">
+
+  <header class="app-header">
+    <h1>Research QA System</h1>
+    <p class="subtitle">Evidence-verified question answering over research papers</p>
+  </header>
+
+  <div class="layout">
+
+    <!-- LEFT PANEL: Papers -->
+    <aside class="panel papers-panel">
+      <h2>Papers</h2>
+
+      <div class="upload-box">
+        <input type="file" id="pdf-file-input" accept="application/pdf" />
+        <button id="upload-btn">Upload PDF</button>
+        <div id="upload-status" class="status-text"></div>
+      </div>
+
+      <div id="papers-list" class="papers-list">
+        <p class="muted">Loading papers…</p>
+      </div>
+
+      <button id="refresh-papers-btn" class="secondary-btn">Refresh list</button>
+      <button id="clear-all-btn" class="danger-btn">Clear all papers</button>
+    </aside>
+
+    <!-- MAIN PANEL: Ask -->
+    <main class="panel main-panel">
+      <h2>Ask a Question</h2>
+
+      <div class="selected-papers">
+        <span class="label">Selected papers:</span>
+        <span id="selected-papers-display" class="muted">none — select from the left</span>
+      </div>
+
+      <textarea id="question-input" placeholder="e.g. How does ZJIT handle local variables?" rows="2"></textarea>
+
+      <div class="controls-row">
+        <label class="checkbox-label">
+          <input type="checkbox" id="compare-baseline-checkbox" />
+          Also run baseline (simple RAG) for comparison
+        </label>
+        <button id="ask-btn">Ask</button>
+      </div>
+
+      <details class="legend-box">
+        <summary>What do "citation" and "verification status" mean?</summary>
+        <div class="legend-content">
+          <p>
+            Every factual sentence the system generates (a <strong>claim</strong>) must point
+            to a specific evidence passage from the paper it's based on (a <strong>citation</strong>,
+            e.g. <code>[E01]</code>). We don't just trust that the citation is honest — a separate
+            AI model independently checks whether the cited text actually supports the claim.
+          </p>
+          <ul>
+            <li><span class="claim-status-tag valid">VALID</span> — independently confirmed: the cited evidence directly supports this claim.</li>
+            <li><span class="claim-status-tag flagged">FLAGGED</span> — could not be confirmed automatically. This does <em>not</em> mean the claim is false — often it's true but phrased in a way (e.g. combining facts from multiple sentences) the automated checker couldn't verify with confidence. It means: <strong>worth a human double-check.</strong></li>
+            <li><span class="claim-status-tag no-citations">NO_CITATIONS</span> — the system made a claim without citing any evidence (should be rare).</li>
+          </ul>
+        </div>
+      </details>
+
+      <div id="loading-indicator" class="loading hidden">
+        <div class="spinner"></div>
+        <span id="loading-text">Thinking…</span>
+      </div>
+
+      <div id="results-area"></div>
+
+    </main>
+
+  </div>
+
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

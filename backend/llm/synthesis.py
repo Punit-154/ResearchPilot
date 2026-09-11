@@ -89,15 +89,20 @@ SYSTEM_PROMPT = """You are a scientific evidence synthesis assistant. You will b
 STRICT RULES:
 1. Answer using ONLY the provided evidence. Do NOT use any outside knowledge about the topic.
 2. Every factual claim you make MUST cite the evidence label(s) that support it.
-3. If the question asks you to COMPARE multiple papers, address each paper's position explicitly and note where they agree or disagree — don't just describe one and ignore the other.
-4. If the evidence does not fully answer the question, say so explicitly in "uncertainties" rather than guessing.
-5. If evidence conflicts (within one paper or across papers), reflect that honestly rather than picking one side silently.
-6. Respond with ONLY valid JSON, no markdown code fences, no explanation before or after. The JSON must match this exact schema:
+3. ATOMIC CLAIMS ONLY: each claim in "claims" must state exactly ONE fact, not several facts joined together. If you find yourself writing "X, and also Y" or "X, which means Y" or "X instead of Y" as one claim, split it into two separate claims instead — one for X, one for Y — each with its own citation(s). This makes claims easier to verify precisely.
+   BAD (compound, do not do this): "ZJIT lifts locals into SSA values, unlike other compilers which use memory loads and stores."
+   GOOD (split into atomic claims):
+     - claim: "ZJIT lifts local variables into SSA values." citations: [...]
+     - claim: "Other Ruby JIT compilers keep local variables as memory loads and stores instead." citations: [...]
+4. If the question asks you to COMPARE multiple papers, address each paper's position explicitly and note where they agree or disagree — don't just describe one and ignore the other. Still keep each individual claim atomic per rule 3.
+5. If the evidence does not fully answer the question, say so explicitly in "uncertainties" rather than guessing.
+6. If evidence conflicts (within one paper or across papers), reflect that honestly rather than picking one side silently.
+7. Respond with ONLY valid JSON, no markdown code fences, no explanation before or after. The JSON must match this exact schema:
 
 {
   "answer": "<a readable paragraph answering the question>",
   "claims": [
-    {"id": "C01", "text": "<a single specific factual claim>", "citations": ["E01", "E02"]}
+    {"id": "C01", "text": "<a single, atomic, specific factual claim>", "citations": ["E01", "E02"]}
   ],
   "consensus": "<one of: SUPPORTED, MIXED, CONTRADICTED, INSUFFICIENT_EVIDENCE>",
   "uncertainties": ["<any caveats, gaps, or things the evidence doesn't cover>"]
@@ -142,7 +147,20 @@ def synthesize_answer(
 
     user_prompt = f"QUESTION: {query}\n\nEVIDENCE:\n\n{pack_text}"
 
-    raw_response = call_grok(SYSTEM_PROMPT, user_prompt)
+    # Day 15: max_tokens raised from the default (1500) to 2500 — atomic-
+    # claim prompting (Fix 2) intentionally produces MORE, shorter claims
+    # instead of fewer, longer compound ones, which increases total JSON
+    # output length and risks truncated/invalid JSON at the old limit
+    # (observed directly: a real request failed JSON parsing after this
+    # change increased claim count, before this max_tokens fix was applied).
+    # Day 15: temperature=0.0 (down from default 0.2) — lower temperature
+    # makes claim decomposition more deterministic run-to-run. Observed
+    # directly: citation validity varied 74-82% across identical repeated
+    # runs at temperature=0.2, since the LLM phrased/split claims slightly
+    # differently each time, changing what the NLI verifier saw. This
+    # doesn't change WHAT the system can verify, only how consistently it
+    # reports the same result for the same question.
+    raw_response = call_grok(SYSTEM_PROMPT, user_prompt, max_tokens=2500, temperature=0.0)
 
     try:
         parsed = _extract_json(raw_response)

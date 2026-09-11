@@ -204,6 +204,7 @@ function renderFullArchitectureResult(data) {
           <span class="claim-status-tag ${statusClass}">${claim.verification_status}</span>
           <div style="font-size:11px;color:#888;margin-top:4px;">
             citations: ${claim.citations.join(", ") || "none"}
+            ${claim.joint_citation_check ? `<br/>joint check: ${claim.joint_citation_check.nli_label} (${(claim.joint_citation_check.confidence * 100).toFixed(0)}%)` : ""}
           </div>
         </div>`;
     })

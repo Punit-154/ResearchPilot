@@ -33,7 +33,7 @@ API_BASE = "http://localhost:8000"
 # expected_keywords are phrases a correct, complete answer should contain
 # — used only for the crude keyword-recall proxy metric described above.
 # ─────────────────────────────────────────────────────────────────────
-PAPER_ID = 7
+PAPER_ID = 3
 SUBJECT_NAME = "ZJIT"
 
 TEST_QUESTIONS = [

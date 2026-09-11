@@ -104,6 +104,7 @@ def get_answer(
                 "citations": cv.citation_labels,
                 "verification_status": cv.status,
                 "citation_details": cv.per_citation_labels,
+                "joint_citation_check": cv.joint_check,
             }
             for cv in claim_verifications
         ],

@@ -7,10 +7,18 @@ This is the core "verification" layer of the architecture: relevance
 (from retrieval) is not the same as support. A chunk can be topically
 about the right subject while not actually confirming the claim.
 
-Model: cross-encoder/nli-deberta-v3-base via sentence-transformers'
-CrossEncoder — takes (premise, hypothesis) pairs directly, outputs
-3-class logits [contradiction, entailment, neutral] (this is the standard
-label order for this model family, per its model card).
+Day 16 (Fix 3): switched from cross-encoder/nli-deberta-v3-base to
+MoritzLaurer/DeBERTa-v3-large-mnli-fever-anli-ling-wanli — a larger model
+additionally trained on FEVER (fact verification) and ANLI (adversarial
+NLI), both more relevant to "does this evidence support this claim"-style
+verification than plain SNLI/MultiNLI. This is a well-established, widely
+cited model in NLP research specifically for this kind of task, not an
+arbitrary substitution.
+
+IMPORTANT (lesson from Day 9): we were previously burned by assuming a
+model's output label order without checking. This implementation reads
+label order directly from the model's own config.id2label at load time,
+so it is correct regardless of what the actual order is — never hardcoded.
 """
 
 import os
@@ -18,13 +26,12 @@ from functools import lru_cache
 from dataclasses import dataclass
 import re
 
-from sentence_transformers import CrossEncoder
+import torch
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
-NLI_MODEL_NAME = os.getenv("NLI_MODEL", "cross-encoder/nli-deberta-v3-base")
-
-# Standard label order for cross-encoder/nli-deberta-v3-base and most
-# sentence-transformers NLI cross-encoders.
-_LABELS = ["contradiction", "entailment", "neutral"]
+NLI_MODEL_NAME = os.getenv(
+    "NLI_MODEL", "MoritzLaurer/DeBERTa-v3-large-mnli-fever-anli-ling-wanli"
+)
 
 # ─────────────────────────────────────────────────────────────────────
 # KNOWN LIMITATION + WORKAROUND: general-purpose NLI models (trained on
@@ -120,9 +127,65 @@ class NLIResult:
     confidence: float  # softmax probability of the winning label
 
 
+@dataclass
+class _LoadedNLIModel:
+    tokenizer: any
+    model: any
+    label_map: dict[int, str]  # index -> normalized label ("entailment"/"contradiction"/"neutral")
+
+
 @lru_cache(maxsize=1)
-def get_nli_model() -> CrossEncoder:
-    return CrossEncoder(NLI_MODEL_NAME)
+def get_nli_model() -> _LoadedNLIModel:
+    """
+    Loads the NLI model + tokenizer once and caches it. Label order is
+    read from the model's own config.id2label rather than assumed —
+    see module docstring for why this matters (Day 9 label-order bug).
+    """
+    tokenizer = AutoTokenizer.from_pretrained(NLI_MODEL_NAME)
+    model = AutoModelForSequenceClassification.from_pretrained(NLI_MODEL_NAME)
+    model.eval()
+
+    raw_id2label = model.config.id2label  # e.g. {0: "entailment", 1: "neutral", 2: "contradiction"}
+    label_map = {}
+    for idx, raw_label in raw_id2label.items():
+        normalized = raw_label.strip().lower()
+        # Defensive normalization in case the model card uses slightly
+        # different casing/spelling than our internal 3 labels.
+        if "entail" in normalized:
+            label_map[idx] = "entailment"
+        elif "contradict" in normalized:
+            label_map[idx] = "contradiction"
+        else:
+            label_map[idx] = "neutral"
+
+    print(f"[nli] Loaded {NLI_MODEL_NAME} — label map: {label_map}")
+    return _LoadedNLIModel(tokenizer=tokenizer, model=model, label_map=label_map)
+
+
+def _predict_batch(pairs: list[tuple[str, str]]) -> list[NLIResult]:
+    """Runs the loaded model on a batch of (premise, hypothesis) pairs."""
+    loaded = get_nli_model()
+
+    inputs = loaded.tokenizer(
+        [p[0] for p in pairs],
+        [p[1] for p in pairs],
+        return_tensors="pt",
+        truncation=True,
+        padding=True,
+        max_length=512,
+    )
+
+    with torch.no_grad():
+        outputs = loaded.model(**inputs)
+        probs = torch.softmax(outputs.logits, dim=-1)
+
+    results = []
+    for row in probs:
+        winner_idx = int(torch.argmax(row).item())
+        confidence = float(row[winner_idx].item())
+        label = loaded.label_map[winner_idx]
+        results.append(NLIResult(label=label, confidence=confidence))
+    return results
 
 
 def check_entailment(evidence_text: str, claim_text: str, subject_name: str | None = None) -> NLIResult:
@@ -138,14 +201,7 @@ def check_entailment(evidence_text: str, claim_text: str, subject_name: str | No
     if subject_name:
         evidence_text = resolve_self_references(evidence_text, subject_name)
 
-    model = get_nli_model()
-    scores = model.predict([(evidence_text, claim_text)])[0]  # raw logits, shape (3,)
-
-    import numpy as np
-    probs = np.exp(scores) / np.sum(np.exp(scores))  # softmax
-    winner_idx = int(np.argmax(probs))
-
-    return NLIResult(label=_LABELS[winner_idx], confidence=float(probs[winner_idx]))
+    return _predict_batch([(evidence_text, claim_text)])[0]
 
 
 def check_entailment_batch(
@@ -184,14 +240,4 @@ def check_entailment_batch(
     if subject_name:
         pairs = [(resolve_self_references(premise, subject_name), hyp) for premise, hyp in pairs]
 
-    import numpy as np
-
-    model = get_nli_model()
-    all_scores = model.predict(pairs)  # shape (N, 3)
-
-    results = []
-    for scores in all_scores:
-        probs = np.exp(scores) / np.sum(np.exp(scores))
-        winner_idx = int(np.argmax(probs))
-        results.append(NLIResult(label=_LABELS[winner_idx], confidence=float(probs[winner_idx])))
-    return results
+    return _predict_batch(pairs)

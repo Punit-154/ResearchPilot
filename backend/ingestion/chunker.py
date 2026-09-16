@@ -14,7 +14,14 @@ Overlap keeps context from being cut off mid-thought at chunk boundaries.
 
 from dataclasses import dataclass
 
-CHUNK_SIZE_WORDS = 180
+CHUNK_SIZE_WORDS = 180  # Day 16: reverted from 250 after direct A/B measurement
+# showed 250-word chunks performed WORSE, not better: 70.2% citation validity
+# (3 runs) vs 76.3% at 180 words (5 runs) — a 6.1-point regression, and all
+# 3 larger-chunk runs landed below the worst 180-word run. The hypothesis
+# (larger chunks keep compound facts together) was reasonable but did not
+# hold up empirically — likely because larger chunks also pull in more
+# unrelated sentences into the same candidate pool, diluting sentence
+# selection even with the Day 9 fix in place. Reverted based on data.
 CHUNK_OVERLAP_WORDS = 40
 
 

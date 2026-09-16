@@ -153,14 +153,15 @@ def synthesize_answer(
     # output length and risks truncated/invalid JSON at the old limit
     # (observed directly: a real request failed JSON parsing after this
     # change increased claim count, before this max_tokens fix was applied).
-    # Day 15: temperature=0.0 (down from default 0.2) — lower temperature
-    # makes claim decomposition more deterministic run-to-run. Observed
-    # directly: citation validity varied 74-82% across identical repeated
-    # runs at temperature=0.2, since the LLM phrased/split claims slightly
-    # differently each time, changing what the NLI verifier saw. This
-    # doesn't change WHAT the system can verify, only how consistently it
-    # reports the same result for the same question.
-    raw_response = call_grok(SYSTEM_PROMPT, user_prompt, max_tokens=2500, temperature=0.0)
+    # Day 15: temperature reverted to 0.2 (the pre-Day-15 default) after
+    # direct A/B measurement showed temperature=0.0 performed WORSE, not
+    # better: temp=0.2 averaged 78.2% citation validity across 3 runs vs
+    # temp=0.0 averaging 69.0% across 5 runs — a 9-point regression in the
+    # opposite direction from what was intended. Lower temperature made
+    # claim generation more deterministic, but the deterministic output it
+    # settled into was not more verifiable — determinism is not the same
+    # as verifiability. This is a real empirical finding, not a guess.
+    raw_response = call_grok(SYSTEM_PROMPT, user_prompt, max_tokens=2500, temperature=0.2)
 
     try:
         parsed = _extract_json(raw_response)

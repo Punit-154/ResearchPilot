@@ -401,6 +401,31 @@ button:disabled {
   margin: 2px;
 }
 
+.evidence-details {
+  margin-bottom: 6px;
+}
+
+.evidence-tag.clickable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.evidence-tag.clickable:hover {
+  background: #e5e7eb;
+}
+
+.evidence-text {
+  font-size: 12px;
+  color: #333;
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  border-left: 3px solid #2563eb;
+  padding: 8px 12px;
+  margin-top: 4px;
+  border-radius: 4px;
+  line-height: 1.5;
+}
+
 .uncertainties {
   margin-top: 12px;
   font-size: 12px;

@@ -69,9 +69,11 @@ def get_answer(
     # multiple papers, so the LLM/human can tell sources apart)
     distinct_paper_ids = {e.paper_id for e in evidence}
     paper_titles = {}
+    paper_subject_names = {}
     if distinct_paper_ids:
         papers = db.query(Paper).filter(Paper.id.in_(distinct_paper_ids)).all()
         paper_titles = {p.id: p.title for p in papers}
+        paper_subject_names = {p.id: p.subject_name for p in papers}
 
     try:
         synthesis = synthesize_answer(q, evidence, paper_titles=paper_titles)
@@ -82,7 +84,10 @@ def get_answer(
         raise HTTPException(status_code=502, detail=str(e))
 
     claim_verifications = verify_claims(
-        synthesis.claims, synthesis.evidence_by_label, subject_name=effective_subject_name
+        synthesis.claims,
+        synthesis.evidence_by_label,
+        subject_name=effective_subject_name,
+        subject_names_by_paper_id=paper_subject_names,
     )
 
     # Overall citation health: what fraction of claims are actually backed
@@ -120,6 +125,7 @@ def get_answer(
                 "paper_id": item.paper_id,
                 "paper_title": item.paper_title,
                 "page": item.page,
+                "text": item.text,
             }
             for label, item in synthesis.evidence_by_label.items()
         ],

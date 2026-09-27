@@ -211,7 +211,12 @@ function renderFullArchitectureResult(data) {
     .join("");
 
   const evidenceHtml = (data.evidence_used || [])
-    .map((e) => `<span class="evidence-tag">[${e.label}] ${escapeHtml(e.paper_title)} p.${e.page}</span>`)
+    .map((e) => `
+      <details class="evidence-details">
+        <summary class="evidence-tag clickable">[${e.label}] ${escapeHtml(e.paper_title)} p.${e.page}</summary>
+        <div class="evidence-text">${escapeHtml(e.text)}</div>
+      </details>
+    `)
     .join("");
 
   const uncertaintiesHtml = (data.uncertainties || []).length

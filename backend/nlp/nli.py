@@ -207,6 +207,7 @@ def check_entailment(evidence_text: str, claim_text: str, subject_name: str | No
 def check_entailment_batch(
     pairs: list[tuple[str, str]],
     subject_name: str | None = None,
+    subject_names: list[str | None] | None = None,
     use_sentence_selection: bool = True,
     top_n_sentences: int = 2,
 ) -> list[NLIResult]:
@@ -216,6 +217,7 @@ def check_entailment_batch(
     against one claim, or one evidence chunk against many claims).
 
     subject_name: see check_entailment() docstring.
+    subject_names: optional list of subject names (one per pair) for multi-document scenarios.
     use_sentence_selection: if True (default), each premise is first reduced
     to its most claim-relevant sentence(s) — see sentence_selection.py for
     why this matters.
@@ -237,7 +239,12 @@ def check_entailment_batch(
             for premise, hyp in pairs
         ]
 
-    if subject_name:
+    if subject_names:
+        pairs = [
+            (resolve_self_references(premise, s_name) if s_name else premise, hyp)
+            for (premise, hyp), s_name in zip(pairs, subject_names)
+        ]
+    elif subject_name:
         pairs = [(resolve_self_references(premise, subject_name), hyp) for premise, hyp in pairs]
 
     return _predict_batch(pairs)

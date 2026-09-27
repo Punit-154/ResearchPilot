@@ -38,6 +38,7 @@ def verify_claims(
     claims: list[Claim],
     evidence_by_label: dict[str, EvidenceItem],
     subject_name: str | None = None,
+    subject_names_by_paper_id: dict[int, str | None] | None = None,
 ) -> list[ClaimVerification]:
     """
     For each claim, checks whether ITS OWN cited evidence actually entails
@@ -56,6 +57,7 @@ def verify_claims(
     # ── Pass 1: individual citation checks (original behavior) ──────────
     pairs = []
     pair_owners = []  # (claim_index, label)
+    pair_subject_names = []
 
     for claim_idx, claim in enumerate(claims):
         for label in claim.citation_labels:
@@ -64,8 +66,18 @@ def verify_claims(
                 continue  # LLM cited a label that doesn't exist — skip, handled below
             pairs.append((evidence_item.text, claim.text))
             pair_owners.append((claim_idx, label))
+            if subject_names_by_paper_id:
+                pair_subject_names.append(subject_names_by_paper_id.get(evidence_item.paper_id))
 
-    nli_results = check_entailment_batch(pairs, subject_name=subject_name, top_n_sentences=3) if pairs else []
+    if pairs:
+        nli_results = check_entailment_batch(
+            pairs,
+            subject_name=subject_name,
+            subject_names=pair_subject_names if subject_names_by_paper_id else None,
+            top_n_sentences=3
+        )
+    else:
+        nli_results = []
 
     per_claim_citation_results: dict[int, list[dict]] = {i: [] for i in range(len(claims))}
     for (claim_idx, label), nli in zip(pair_owners, nli_results):
@@ -79,18 +91,32 @@ def verify_claims(
     # contains, without introducing any evidence the LLM didn't itself cite.
     joint_pairs = []
     joint_owners = []  # claim_index
-
+    # For joint checks, resolving pronouns is tricky if evidence comes from multiple papers.
+    # We will resolve them individually *before* combining text.
+    
     for claim_idx, claim in enumerate(claims):
         valid_labels = [l for l in claim.citation_labels if l in evidence_by_label]
         if len(valid_labels) >= 2:
-            combined_text = " ".join(evidence_by_label[l].text for l in valid_labels)
+            combined_texts = []
+            for l in valid_labels:
+                item = evidence_by_label[l]
+                text = item.text
+                # Resolve pronouns eagerly for each piece of evidence before joining
+                s_name = subject_names_by_paper_id.get(item.paper_id) if subject_names_by_paper_id else subject_name
+                if s_name:
+                    from backend.nlp.nli import resolve_self_references
+                    text = resolve_self_references(text, s_name)
+                combined_texts.append(text)
+                
+            combined_text = " ".join(combined_texts)
             joint_pairs.append((combined_text, claim.text))
             joint_owners.append(claim_idx)
 
     # Use a slightly larger sentence pool for joint checks since the
     # combined premise pulls from more source material than a single chunk.
+    # Note: we pass None for subject_name/subject_names here since we already resolved eagerly.
     joint_nli_results = (
-        check_entailment_batch(joint_pairs, subject_name=subject_name, top_n_sentences=4)
+        check_entailment_batch(joint_pairs, top_n_sentences=4)
         if joint_pairs
         else []
     )

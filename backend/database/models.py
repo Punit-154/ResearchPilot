@@ -4,8 +4,9 @@ These let the rest of the backend (ingestion, retrieval, etc.) interact with
 the DB using Python objects instead of raw SQL.
 """
 
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, TIMESTAMP, func
+from sqlalchemy import Column, Integer, String, Text, Boolean, ForeignKey, TIMESTAMP, func
 from sqlalchemy.orm import relationship
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from pgvector.sqlalchemy import Vector
 
 from backend.database.db import Base
@@ -73,3 +74,14 @@ class Citation(Base):
     citing_paper_id = Column(Integer, ForeignKey("papers.id", ondelete="CASCADE"))
     cited_paper_id = Column(Integer, ForeignKey("papers.id", ondelete="SET NULL"))
     raw_text = Column(Text)
+
+class QueryHistory(Base):
+    __tablename__ = "query_history"
+
+    id = Column(Integer, primary_key=True)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    question = Column(Text, nullable=False)
+    paper_ids = Column(ARRAY(Integer), nullable=False)
+    paper_titles = Column(ARRAY(Text), nullable=False)
+    full_response = Column(JSONB, nullable=False)
+    is_baseline = Column(Boolean, default=False)

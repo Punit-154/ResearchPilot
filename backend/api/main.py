@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from backend.database.db import get_db, engine, Base
 from backend.database import models  # noqa: F401  (ensures models are registered)
-from backend.api.routes import ingestion, papers, query, verify, answer, baseline
+from backend.api.routes import ingestion, papers, query, verify, answer, baseline, history
 
 app = FastAPI(title="Research QA System")
 
@@ -21,6 +21,7 @@ app.include_router(query.router)
 app.include_router(verify.router)
 app.include_router(answer.router)
 app.include_router(baseline.router)
+app.include_router(history.router)
 
 
 @app.on_event("startup")

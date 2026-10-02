@@ -32,7 +32,7 @@ body {
 
 .layout {
   display: grid;
-  grid-template-columns: 300px 1fr;
+  grid-template-columns: 280px 1fr 280px;
   gap: 20px;
 }
 
@@ -73,7 +73,7 @@ body {
 .status-text.error { color: #cf222e; }
 .status-text.info { color: #666; }
 
-.papers-list {
+.papers-list, .history-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -81,7 +81,7 @@ body {
   overflow-y: auto;
 }
 
-.paper-card {
+.paper-card, .history-card {
   border: 1px solid #e0e0e0;
   border-radius: 6px;
   padding: 10px;
@@ -90,14 +90,25 @@ body {
   font-size: 13px;
 }
 
-.paper-card:hover {
+.paper-card:hover, .history-card:hover {
   border-color: #999;
   background: #fafafa;
 }
 
-.paper-card.selected {
+.paper-card.selected, .history-card.selected {
   border-color: #2563eb;
   background: #eff6ff;
+}
+
+.history-card .history-question {
+  font-weight: 600;
+  margin-bottom: 4px;
+  line-height: 1.3;
+}
+
+.history-card .history-meta {
+  color: #666;
+  font-size: 11px;
 }
 
 .paper-card .paper-title {

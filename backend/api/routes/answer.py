@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
 
 from backend.database.db import get_db
-from backend.database.models import Paper
+from backend.database.models import Paper, QueryHistory
 from backend.retrieval.hybrid import hybrid_search
 from backend.retrieval.entity_resolution import resolve_paper_names
 from backend.llm.synthesis import synthesize_answer
@@ -68,10 +68,14 @@ def get_answer(
     # Fetch paper titles for evidence labeling (needed when evidence spans
     # multiple papers, so the LLM/human can tell sources apart)
     distinct_paper_ids = {e.paper_id for e in evidence}
+    # Also fetch titles for the specifically queried paper_ids even if no evidence was found for them
+    query_paper_ids = set(paper_ids) if paper_ids else set()
+    all_needed_titles = distinct_paper_ids | query_paper_ids
+    
     paper_titles = {}
     paper_subject_names = {}
-    if distinct_paper_ids:
-        papers = db.query(Paper).filter(Paper.id.in_(distinct_paper_ids)).all()
+    if all_needed_titles:
+        papers = db.query(Paper).filter(Paper.id.in_(all_needed_titles)).all()
         paper_titles = {p.id: p.title for p in papers}
         paper_subject_names = {p.id: p.subject_name for p in papers}
 
@@ -95,7 +99,7 @@ def get_answer(
     total_claims = len(claim_verifications)
     valid_claims = sum(1 for c in claim_verifications if c.status == "VALID")
 
-    return {
+    response_data = {
         "query": q,
         "answer": synthesis.answer,
         "llm_reported_consensus": synthesis.consensus,
@@ -130,3 +134,15 @@ def get_answer(
             for label, item in synthesis.evidence_by_label.items()
         ],
     }
+
+    history_entry = QueryHistory(
+        question=q,
+        paper_ids=paper_ids if paper_ids else [],
+        paper_titles=[paper_titles.get(pid, f"Unknown ({pid})") for pid in (paper_ids or [])],
+        full_response=response_data,
+        is_baseline=False
+    )
+    db.add(history_entry)
+    db.commit()
+
+    return response_data

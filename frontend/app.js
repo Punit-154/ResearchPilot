@@ -59,6 +59,9 @@ function togglePaperSelection(paperId) {
   }
   renderPapersList();
   renderSelectedPapersDisplay();
+  if (document.getElementById("filter-history-checkbox").checked) {
+    loadHistory();
+  }
 }
 
 function renderSelectedPapersDisplay() {
@@ -74,6 +77,105 @@ function renderSelectedPapersDisplay() {
   });
   el.textContent = names.join(", ");
   el.className = "";
+}
+
+// ─────────────────────────────────────────────────────────────
+// History list
+// ─────────────────────────────────────────────────────────────
+let allHistory = [];
+
+async function loadHistory() {
+  const listEl = document.getElementById("history-list");
+  listEl.innerHTML = '<p class="muted">Loading history…</p>';
+  
+  const filterSelected = document.getElementById("filter-history-checkbox").checked;
+  let url = "/history";
+  
+  if (filterSelected && selectedPaperIds.size > 0) {
+    // Only fetch for the first selected paper for simplicity, or we could pass multiple
+    // The API currently accepts a single paper_id for filtering
+    const firstPaperId = [...selectedPaperIds][0];
+    url += `?paper_id=${firstPaperId}`;
+  } else if (filterSelected) {
+    listEl.innerHTML = '<p class="muted">No papers selected to filter by.</p>';
+    return;
+  }
+
+  try {
+    const resp = await fetch(url);
+    const data = await resp.json();
+    allHistory = data.history || [];
+    renderHistoryList();
+  } catch (err) {
+    listEl.innerHTML = `<p class="muted">Failed to load history: ${err.message}</p>`;
+  }
+}
+
+function renderHistoryList() {
+  const listEl = document.getElementById("history-list");
+
+  if (allHistory.length === 0) {
+    listEl.innerHTML = '<p class="muted">No history found.</p>';
+    return;
+  }
+
+  listEl.innerHTML = "";
+  for (const item of allHistory) {
+    const card = document.createElement("div");
+    card.className = "history-card";
+    
+    const d = new Date(item.created_at);
+    const timeStr = d.toLocaleDateString() + " " + d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+    
+    // Join paper titles, defaulting to "Global Search" if none
+    const papersStr = item.paper_titles && item.paper_titles.length > 0 
+      ? item.paper_titles.join(", ") 
+      : "Global Search";
+      
+    const typeBadge = item.is_baseline 
+      ? `<span class="subject-badge none" style="background:#fef08a;color:#854d0e;">Baseline</span>`
+      : `<span class="subject-badge" style="background:#dcfce7;color:#166534;">Verified</span>`;
+
+    card.innerHTML = `
+      <div class="history-question">${escapeHtml(item.question)}</div>
+      <div class="history-meta">${timeStr} · ${escapeHtml(papersStr)}</div>
+      ${typeBadge}
+    `;
+
+    card.addEventListener("click", () => loadHistoryDetail(item.id));
+    listEl.appendChild(card);
+  }
+}
+
+async function loadHistoryDetail(id) {
+  const resultsArea = document.getElementById("results-area");
+  
+  // Highlight selected card
+  document.querySelectorAll('.history-card').forEach(c => c.classList.remove('selected'));
+  event.currentTarget.classList.add('selected');
+  
+  setLoading(true, "Loading saved answer…");
+  try {
+    const resp = await fetch(`/history/${id}`);
+    const data = await resp.json();
+    
+    if (!resp.ok) {
+      throw new Error(data.detail || "Failed to load history item");
+    }
+    
+    resultsArea.innerHTML = "";
+    
+    // Check if it was baseline by checking if citation_health exists (baseline doesn't have it)
+    if (data.citation_health) {
+      renderFullArchitectureResult(data);
+    } else {
+      renderBaselineResult(data);
+    }
+  } catch (err) {
+    resultsArea.innerHTML = `<div class="error-box">Error: ${escapeHtml(err.message)}</div>`;
+  } finally {
+    setLoading(false);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -181,6 +283,7 @@ async function askQuestion() {
     resultsArea.innerHTML = `<div class="error-box">Error: ${escapeHtml(err.message)}</div>`;
   } finally {
     setLoading(false);
+    loadHistory();
   }
 }
 
@@ -329,5 +432,7 @@ document.getElementById("upload-btn").addEventListener("click", uploadPdf);
 document.getElementById("refresh-papers-btn").addEventListener("click", loadPapers);
 document.getElementById("clear-all-btn").addEventListener("click", clearAllPapers);
 document.getElementById("ask-btn").addEventListener("click", askQuestion);
+document.getElementById("filter-history-checkbox").addEventListener("change", loadHistory);
 
 loadPapers();
+loadHistory();

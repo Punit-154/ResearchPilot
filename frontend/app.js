@@ -433,12 +433,8 @@ document.getElementById("refresh-papers-btn").addEventListener("click", loadPape
 document.getElementById("clear-all-btn").addEventListener("click", clearAllPapers);
 document.getElementById("ask-btn").addEventListener("click", askQuestion);
 document.getElementById("filter-history-checkbox").addEventListener("change", loadHistory);
-document.getElementById("clear-history-btn").addEventListener("click", clearHistory);
 
-loadPapers();
-loadHistory();
-
-async function clearHistory() {
+document.getElementById("clear-history-btn").addEventListener("click", async () => {
   if (!confirm("Clear all query history? This cannot be undone.")) return;
 
   const btn = document.getElementById("clear-history-btn");
@@ -456,4 +452,7 @@ async function clearHistory() {
     btn.disabled = false;
     btn.textContent = "Clear history";
   }
-}
+});
+
+loadPapers();
+loadHistory();

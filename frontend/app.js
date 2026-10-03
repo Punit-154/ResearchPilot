@@ -142,17 +142,17 @@ function renderHistoryList() {
       ${typeBadge}
     `;
 
-    card.addEventListener("click", () => loadHistoryDetail(item.id));
+    card.addEventListener("click", () => loadHistoryDetail(item.id, card));
     listEl.appendChild(card);
   }
 }
 
-async function loadHistoryDetail(id) {
+async function loadHistoryDetail(id, cardEl) {
   const resultsArea = document.getElementById("results-area");
-  
+
   // Highlight selected card
   document.querySelectorAll('.history-card').forEach(c => c.classList.remove('selected'));
-  event.currentTarget.classList.add('selected');
+  if (cardEl) cardEl.classList.add('selected');
   
   setLoading(true, "Loading saved answer…");
   try {

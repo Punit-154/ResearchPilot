@@ -35,6 +35,12 @@ def get_history_detail(history_id: int, db: Session = Depends(get_db)):
     record = db.query(QueryHistory).filter(QueryHistory.id == history_id).first()
     if not record:
         raise HTTPException(status_code=404, detail="History record not found")
-    
+
     # Return the full response exactly as it was generated
     return record.full_response
+
+@router.delete("")
+def clear_history(db: Session = Depends(get_db)):
+    deleted = db.query(QueryHistory).delete()
+    db.commit()
+    return {"deleted_entries": deleted}

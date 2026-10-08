@@ -34,6 +34,7 @@ class Claim:
     id: str
     text: str
     citation_labels: list[str]  # e.g. ["E01", "E02"]
+    parent_claim_id: str | None = None  # set by decompose_claims(); None = atomic / top-level
 
 
 @dataclass

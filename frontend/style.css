@@ -453,3 +453,37 @@ button:disabled {
   border-radius: 6px;
   font-size: 13px;
 }
+
+/* ── Decomposed claim rendering ─────────────────────────────────────────── */
+
+.claim-item.decomposed-parent {
+  background: #f8f9ff;
+  border-left: 3px solid #6366f1;  /* indigo — visually distinct from VALID/FLAGGED */
+}
+
+.sub-claims-details {
+  margin-top: 8px;
+}
+
+.sub-claims-summary {
+  font-size: 12px;
+  color: #6366f1;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+
+.sub-claims-summary:hover {
+  text-decoration: underline;
+}
+
+.sub-claims-list {
+  margin-top: 6px;
+  padding-left: 12px;
+  border-left: 2px solid #e0e0e0;
+}
+
+.sub-claims-list .claim-item {
+  font-size: 12px;
+  margin-bottom: 6px;
+}

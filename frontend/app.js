@@ -293,25 +293,35 @@ function renderFullArchitectureResult(data) {
   const block = document.createElement("div");
   block.className = "result-block full-arch";
 
-  const claimsHtml = (data.claims || [])
-    .map((claim) => {
-      const statusClass =
-        claim.verification_status === "VALID"
-          ? "valid"
-          : claim.verification_status === "FLAGGED"
-          ? "flagged"
-          : "no-citations";
+  // ── Group claims by parent_claim_id ───────────────────────────────────
+  // Each group is { parentId, subClaims[], aggregateStatus }.
+  // Atomic claims (parent_claim_id == null) each form their own group of 1,
+  // rendered exactly as before. Decomposed sub-claims are grouped together
+  // under their parent and rendered with an expandable sub-list.
+  const groups = _groupClaims(data.claims || []);
+
+  const claimsHtml = groups.map(group => {
+    if (group.isAtomic) {
+      // ── Standard claim (unchanged from original rendering) ───────────
+      const claim = group.subClaims[0];
+      return _renderSingleClaimHtml(claim);
+    } else {
+      // ── Decomposed compound claim ────────────────────────────────────
+      const statusClass = group.aggregateStatus === "VALID" ? "valid" : "flagged";
+      const subClaimsHtml = group.subClaims.map(_renderSingleClaimHtml).join("");
       return `
-        <div class="claim-item ${statusClass}">
-          ${escapeHtml(claim.text)}
-          <span class="claim-status-tag ${statusClass}">${claim.verification_status}</span>
-          <div style="font-size:11px;color:#888;margin-top:4px;">
-            citations: ${claim.citations.join(", ") || "none"}
-            ${claim.joint_citation_check ? `<br/>joint check: ${claim.joint_citation_check.nli_label} (${(claim.joint_citation_check.confidence * 100).toFixed(0)}%)` : ""}
-          </div>
+        <div class="claim-item ${statusClass} decomposed-parent">
+          <span class="claim-status-tag ${statusClass}">${group.aggregateStatus}</span>
+          <span style="font-size:12px;color:#555;font-style:italic;">
+            Compound claim decomposed into ${group.subClaims.length} sub-facts:
+          </span>
+          <details class="sub-claims-details">
+            <summary class="sub-claims-summary">Show sub-facts ▸</summary>
+            <div class="sub-claims-list">${subClaimsHtml}</div>
+          </details>
         </div>`;
-    })
-    .join("");
+    }
+  }).join("");
 
   const evidenceHtml = (data.evidence_used || [])
     .map((e) => `
@@ -356,6 +366,55 @@ function renderFullArchitectureResult(data) {
   `;
 
   resultsArea.appendChild(block);
+}
+
+// ── Helpers for grouped claim rendering ──────────────────────────────────────
+
+function _groupClaims(claims) {
+  // Pass 1: collect sub-claims by parent_claim_id (preserves insertion order)
+  const parentOrder = [];  // ordered list of parent keys seen
+  const groupMap = {};     // parentId -> subClaims[]
+
+  for (const claim of claims) {
+    const key = claim.parent_claim_id || claim.id;  // atomic: key = own id
+    if (!groupMap[key]) {
+      groupMap[key] = [];
+      parentOrder.push(key);
+    }
+    groupMap[key].push(claim);
+  }
+
+  // Pass 2: compute aggregate status and isAtomic flag
+  return parentOrder.map(key => {
+    const subClaims = groupMap[key];
+    const isAtomic = subClaims.length === 1 && subClaims[0].parent_claim_id == null;
+
+    // ALL-VALID rule: parent is VALID only if every sub-fact is VALID.
+    // NO_CITATIONS treated same as FLAGGED (non-VALID = parent not confirmed).
+    const aggregateStatus = subClaims.every(c => c.verification_status === "VALID")
+      ? "VALID"
+      : "FLAGGED";
+
+    return { isAtomic, subClaims, aggregateStatus };
+  });
+}
+
+function _renderSingleClaimHtml(claim) {
+  const statusClass =
+    claim.verification_status === "VALID"
+      ? "valid"
+      : claim.verification_status === "FLAGGED"
+      ? "flagged"
+      : "no-citations";
+  return `
+    <div class="claim-item ${statusClass}">
+      ${escapeHtml(claim.text)}
+      <span class="claim-status-tag ${statusClass}">${claim.verification_status}</span>
+      <div style="font-size:11px;color:#888;margin-top:4px;">
+        citations: ${claim.citations.join(", ") || "none"}
+        ${claim.joint_citation_check ? `<br/>joint check: ${claim.joint_citation_check.nli_label} (${(claim.joint_citation_check.confidence * 100).toFixed(0)}%)` : ""}
+      </div>
+    </div>`;
 }
 
 function renderBaselineResult(data) {

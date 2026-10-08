@@ -32,6 +32,7 @@ class ClaimVerification:
     status: str  # "VALID" | "FLAGGED" | "NO_CITATIONS"
     per_citation_labels: list[dict]  # [{"label": "E01", "nli_label": "entailment", "confidence": 0.9}]
     joint_check: dict | None = None  # result of checking all citations combined, if 2+ citations
+    parent_claim_id: str | None = None  # mirrors Claim.parent_claim_id; None = atomic / top-level
 
 
 def verify_claims(
@@ -151,6 +152,7 @@ def verify_claims(
                 status=status,
                 per_citation_labels=citation_results,
                 joint_check=joint_result,
+                parent_claim_id=claim.parent_claim_id,
             )
         )
 

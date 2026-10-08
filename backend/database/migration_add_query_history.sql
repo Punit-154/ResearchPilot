@@ -1,5 +1,7 @@
 -- Add query_history table
-CREATE TABLE IF NOT EXISTS query_history (
+DROP TABLE IF EXISTS query_history CASCADE;
+
+CREATE TABLE query_history (
     id SERIAL PRIMARY KEY,
     created_at TIMESTAMPTZ DEFAULT now(),
     question TEXT NOT NULL,

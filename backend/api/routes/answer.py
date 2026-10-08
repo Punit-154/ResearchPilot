@@ -13,6 +13,7 @@ from backend.database.models import Paper, QueryHistory
 from backend.retrieval.hybrid import hybrid_search
 from backend.retrieval.entity_resolution import resolve_paper_names
 from backend.llm.synthesis import synthesize_answer
+from backend.llm.decomposition import decompose_claims
 from backend.llm.grok_client import GrokAPIError
 from backend.verification.citation_verification import verify_claims
 
@@ -41,6 +42,13 @@ def get_answer(
         "one paper is being queried, its auto-detected subject_name (Day 13) is used "
         "automatically. Only needed to override, or when querying multiple papers "
         "with different subjects (a known simplification — see docs).",
+    ),
+    use_claim_decomposition: bool = Query(
+        default=False,
+        description="When True, a post-generation decomposition step splits any "
+        "compound LLM claims into atomic sub-facts before NLI verification. Adds "
+        "~2s and one extra LLM call per answer. Defaults OFF for A/B testing — "
+        "do not set as default until evaluation confirms improvement.",
     ),
     db: Session = Depends(get_db),
 ):
@@ -71,7 +79,7 @@ def get_answer(
     # Also fetch titles for the specifically queried paper_ids even if no evidence was found for them
     query_paper_ids = set(paper_ids) if paper_ids else set()
     all_needed_titles = distinct_paper_ids | query_paper_ids
-    
+
     paper_titles = {}
     paper_subject_names = {}
     if all_needed_titles:
@@ -87,8 +95,24 @@ def get_answer(
         # Grok returned non-JSON — surface it clearly rather than a generic 500
         raise HTTPException(status_code=502, detail=str(e))
 
+    # ── Optional post-generation claim decomposition ─────────────────────
+    # Runs BETWEEN synthesis and verification so verify_claims only ever
+    # sees the post-decomposition (now-atomic) claim list. Fix 1's joint
+    # citation check therefore operates per sub-claim, not per original
+    # compound claim — which is the correct behaviour.
+    if use_claim_decomposition:
+        try:
+            claims_to_verify = decompose_claims(synthesis.claims)
+        except (GrokAPIError, ValueError) as e:
+            # Decomposition failure is non-fatal: fall back to original claims
+            # rather than returning a 502 — the answer is still usable.
+            print(f"[answer] Decomposition failed, falling back to original claims: {e}")
+            claims_to_verify = synthesis.claims
+    else:
+        claims_to_verify = synthesis.claims
+
     claim_verifications = verify_claims(
-        synthesis.claims,
+        claims_to_verify,
         synthesis.evidence_by_label,
         subject_name=effective_subject_name,
         subject_names_by_paper_id=paper_subject_names,
@@ -114,6 +138,7 @@ def get_answer(
                 "verification_status": cv.status,
                 "citation_details": cv.per_citation_labels,
                 "joint_citation_check": cv.joint_check,
+                "parent_claim_id": cv.parent_claim_id,  # None for atomic/top-level claims
             }
             for cv in claim_verifications
         ],

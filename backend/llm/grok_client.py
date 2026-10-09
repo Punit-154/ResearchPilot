@@ -130,3 +130,54 @@ def call_grok(
         return data["choices"][0]["message"]["content"]
     except (KeyError, IndexError) as e:
         raise GrokAPIError(f"Unexpected Grok API response shape: {data}") from e
+
+
+def stream_grok(
+    system_prompt: str,
+    user_prompt: str,
+    max_tokens: int = 2500,
+    temperature: float = 0.2,
+):
+    """
+    Like call_grok, but yields chunks of the response as they arrive.
+    """
+    if not LLM_API_KEY:
+        raise GrokAPIError("No LLM API key set.")
+
+    url = f"{LLM_API_BASE}/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {LLM_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": LLM_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "stream": True,
+    }
+
+    import json
+
+    try:
+        with requests.post(url, headers=headers, json=payload, stream=True, timeout=60) as response:
+            response.raise_for_status()
+            for line in response.iter_lines():
+                if line:
+                    line_str = line.decode('utf-8')
+                    if line_str.startswith("data: "):
+                        data_str = line_str[6:]
+                        if data_str == "[DONE]":
+                            break
+                        try:
+                            data = json.loads(data_str)
+                            delta = data["choices"][0].get("delta", {})
+                            if "content" in delta:
+                                yield delta["content"]
+                        except (json.JSONDecodeError, KeyError, IndexError):
+                            pass
+    except requests.exceptions.RequestException as e:
+        raise GrokAPIError(f"Streaming failed: {e}") from e

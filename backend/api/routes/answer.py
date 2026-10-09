@@ -5,14 +5,17 @@ pack -> LLM synthesis -> citation verification -> final answer with
 per-claim validation status.
 """
 
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException, BackgroundTasks
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+import uuid
+import json
 
-from backend.database.db import get_db
+from backend.database.db import get_db, SessionLocal
 from backend.database.models import Paper, QueryHistory
 from backend.retrieval.hybrid import hybrid_search
 from backend.retrieval.entity_resolution import resolve_paper_names
-from backend.llm.synthesis import synthesize_answer
+from backend.llm.synthesis import synthesize_answer, stream_synthesize_answer
 from backend.llm.decomposition import decompose_claims
 from backend.llm.grok_client import GrokAPIError
 from backend.verification.citation_verification import verify_claims
@@ -171,3 +174,184 @@ def get_answer(
     db.commit()
 
     return response_data
+
+
+# ── Streaming / Async Verification ──────────────────────────────────────────
+
+VERIFICATION_TASKS = {}
+
+
+def async_verify_and_save(
+    query_id: str,
+    q: str,
+    synthesis,
+    use_claim_decomposition: bool,
+    effective_subject_name: str | None,
+    paper_subject_names: dict,
+    paper_ids: list[int],
+    paper_titles: dict,
+):
+    try:
+        # Run decomposition if requested
+        if use_claim_decomposition:
+            try:
+                claims_to_verify = decompose_claims(synthesis.claims)
+            except Exception as e:
+                print(f"[async_verify] Decomposition failed: {e}")
+                claims_to_verify = synthesis.claims
+        else:
+            claims_to_verify = synthesis.claims
+
+        claim_verifications = verify_claims(
+            claims_to_verify,
+            synthesis.evidence_by_label,
+            subject_name=effective_subject_name,
+            subject_names_by_paper_id=paper_subject_names,
+        )
+
+        total_claims = len(claim_verifications)
+        valid_claims = sum(1 for c in claim_verifications if c.status == "VALID")
+        resolution_warnings = [] # Simplified for async
+
+        response_data = {
+            "query": q,
+            "answer": synthesis.answer,
+            "llm_reported_consensus": synthesis.consensus,
+            "uncertainties": synthesis.uncertainties,
+            "resolution_warnings": resolution_warnings,
+            "subject_name_used": effective_subject_name,
+            "claims": [
+                {
+                    "id": cv.claim_id,
+                    "text": cv.claim_text,
+                    "citations": cv.citation_labels,
+                    "verification_status": cv.status,
+                    "citation_details": cv.per_citation_labels,
+                    "joint_citation_check": cv.joint_check,
+                    "parent_claim_id": cv.parent_claim_id,
+                }
+                for cv in claim_verifications
+            ],
+            "citation_health": {
+                "total_claims": total_claims,
+                "valid_claims": valid_claims,
+                "flagged_claims": total_claims - valid_claims,
+            },
+            "evidence_used": [
+                {
+                    "label": label,
+                    "chunk_id": item.chunk_id,
+                    "paper_id": item.paper_id,
+                    "paper_title": item.paper_title,
+                    "page": item.page,
+                    "text": item.text,
+                }
+                for label, item in synthesis.evidence_by_label.items()
+            ],
+        }
+
+        # Save to DB
+        with SessionLocal() as db:
+            history_entry = QueryHistory(
+                question=q,
+                paper_ids=paper_ids if paper_ids else [],
+                paper_titles=[paper_titles.get(pid, f"Unknown ({pid})") for pid in (paper_ids or [])],
+                full_response=response_data,
+                is_baseline=False
+            )
+            db.add(history_entry)
+            db.commit()
+            
+        VERIFICATION_TASKS[query_id] = {"status": "done", "result": response_data}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        VERIFICATION_TASKS[query_id] = {"status": "error", "error": str(e)}
+
+
+@router.get("/stream")
+def stream_answer(
+    background_tasks: BackgroundTasks,
+    q: str = Query(...),
+    top_k: int = Query(default=8, le=30),
+    paper_id: list[int] | None = Query(default=None),
+    use_claim_decomposition: bool = Query(default=False),
+    db: Session = Depends(get_db),
+):
+    """
+    Phase 1: Stream the answer paragraph text as SSE.
+    Once the stream ends, kicks off background verification.
+    """
+    query_id = str(uuid.uuid4())
+    VERIFICATION_TASKS[query_id] = {"status": "processing", "result": None}
+
+    paper_ids = list(dict.fromkeys(paper_id)) if paper_id else None
+
+    # Auto subject_name
+    effective_subject_name = None
+    if paper_ids and len(paper_ids) == 1:
+        paper_row = db.query(Paper).filter(Paper.id == paper_ids[0]).first()
+        if paper_row and paper_row.subject_name:
+            effective_subject_name = paper_row.subject_name
+
+    evidence = hybrid_search(q, db, limit=top_k, paper_ids=paper_ids)
+
+    distinct_paper_ids = {e.paper_id for e in evidence}
+    query_paper_ids = set(paper_ids) if paper_ids else set()
+    all_needed_titles = distinct_paper_ids | query_paper_ids
+    
+    paper_titles = {}
+    paper_subject_names = {}
+    if all_needed_titles:
+        papers = db.query(Paper).filter(Paper.id.in_(all_needed_titles)).all()
+        paper_titles = {p.id: p.title for p in papers}
+        paper_subject_names = {p.id: p.subject_name for p in papers}
+
+    def generate():
+        # First send the query ID so frontend knows where to poll
+        yield f"event: metadata\ndata: {json.dumps({'query_id': query_id})}\n\n"
+        
+        try:
+            stream_gen = stream_synthesize_answer(q, evidence, paper_titles=paper_titles)
+            final_result = None
+            for event_type, data in stream_gen:
+                if event_type == 'answer_chunk':
+                    # Send text chunk
+                    yield f"event: text\ndata: {json.dumps({'chunk': data})}\n\n"
+                elif event_type == 'result':
+                    final_result = data
+            
+            if final_result:
+                background_tasks.add_task(
+                    async_verify_and_save,
+                    query_id, q, final_result, use_claim_decomposition,
+                    effective_subject_name, paper_subject_names, paper_ids, paper_titles
+                )
+            else:
+                VERIFICATION_TASKS[query_id] = {"status": "error", "error": "No final result generated."}
+        except Exception as e:
+            VERIFICATION_TASKS[query_id] = {"status": "error", "error": str(e)}
+            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@router.get("/verify/{query_id}")
+def poll_verification(query_id: str):
+    """
+    Phase 2: Poll for the results of the async verification.
+    """
+    if query_id not in VERIFICATION_TASKS:
+        raise HTTPException(status_code=404, detail="Query ID not found.")
+    
+    task = VERIFICATION_TASKS[query_id]
+    if task["status"] == "done":
+        # Clear it from memory to prevent leaks
+        del VERIFICATION_TASKS[query_id]
+        return {"status": "done", "result": task["result"]}
+    elif task["status"] == "error":
+        err = task["error"]
+        del VERIFICATION_TASKS[query_id]
+        raise HTTPException(status_code=500, detail=err)
+    else:
+        return {"status": "processing"}

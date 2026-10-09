@@ -253,23 +253,88 @@ async function askQuestion() {
 
   const paperIdParams = [...selectedPaperIds].map((id) => `paper_id=${id}`).join("&");
 
-  setLoading(true, "Retrieving evidence and generating answer…");
+  setLoading(true, "Generating answer...");
 
   try {
-    const fullResp = await fetch(`/answer?q=${encodeURIComponent(question)}&${paperIdParams}`);
-    const fullData = await fullResp.json();
+    // Render the initial block
+    resultsArea.innerHTML = `
+      <div class="result-block full-arch" id="stream-block">
+        <div class="result-header">
+          <h3>Full Architecture</h3>
+        </div>
+        <div class="answer-text" id="stream-text"></div>
+        <div id="stream-loading" class="muted" style="margin-top: 10px; font-size: 13px;">
+           <span class="spinner"></span> Generating...
+        </div>
+      </div>
+    `;
+    const streamTextEl = document.getElementById("stream-text");
+    const streamLoadingEl = document.getElementById("stream-loading");
 
+    const fullResp = await fetch(`/answer/stream?q=${encodeURIComponent(question)}&${paperIdParams}`);
+    
     if (!fullResp.ok) {
-      throw new Error(fullData.detail || "Request failed");
+      const errData = await fullResp.json().catch(() => ({}));
+      throw new Error(errData.detail || "Request failed");
     }
 
-    renderFullArchitectureResult(fullData);
+    const reader = fullResp.body.getReader();
+    const decoder = new TextDecoder();
+    let queryId = null;
+    let eventType = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      
+      const chunk = decoder.decode(value, { stream: true });
+      const lines = chunk.split('\n');
+      
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          eventType = line.substring(7).trim();
+        } else if (line.startsWith('data: ')) {
+          const dataStr = line.substring(6).trim();
+          if (!dataStr) continue;
+          const data = JSON.parse(dataStr);
+          
+          if (eventType === 'metadata') {
+            queryId = data.query_id;
+          } else if (eventType === 'text') {
+            streamTextEl.textContent += data.chunk;
+          } else if (eventType === 'error') {
+            throw new Error(data.error);
+          }
+        }
+      }
+    }
+
+    // Now we have the queryId, start polling for verification
+    streamLoadingEl.innerHTML = '<span class="spinner"></span> Verifying claims against evidence...';
+    
+    let finalData = null;
+    while (true) {
+      await new Promise(r => setTimeout(r, 1000)); // poll every 1s
+      const pollResp = await fetch(`/answer/verify/${queryId}`);
+      if (!pollResp.ok) {
+         const errData = await pollResp.json().catch(() => ({}));
+         throw new Error(errData.detail || "Verification failed");
+      }
+      const pollData = await pollResp.json();
+      if (pollData.status === "done") {
+         finalData = pollData.result;
+         break;
+      } else if (pollData.status === "error") {
+         throw new Error(pollData.error || "Verification failed");
+      }
+    }
+
+    // Replace the stream block with the full architecture block
+    resultsArea.innerHTML = "";
+    renderFullArchitectureResult(finalData);
 
     if (compareBaseline) {
       setLoading(true, "Running baseline for comparison…");
-      // Baseline currently supports a single paper_id param per call; if
-      // multiple papers are selected, run baseline against the first one
-      // (baseline was never designed for multi-paper comparison).
       const firstPaperId = [...selectedPaperIds][0];
       const baselineResp = await fetch(
         `/baseline/answer?q=${encodeURIComponent(question)}&paper_id=${firstPaperId}`
@@ -280,7 +345,7 @@ async function askQuestion() {
       }
     }
   } catch (err) {
-    resultsArea.innerHTML = `<div class="error-box">Error: ${escapeHtml(err.message)}</div>`;
+    resultsArea.innerHTML += `<div class="error-box">Error: ${escapeHtml(err.message)}</div>`;
   } finally {
     setLoading(false);
     loadHistory();

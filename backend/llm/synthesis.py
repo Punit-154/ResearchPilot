@@ -183,3 +183,64 @@ def synthesize_answer(
         uncertainties=parsed.get("uncertainties", []),
         evidence_by_label=evidence_by_label,
     )
+
+
+def stream_synthesize_answer(
+    query: str, evidence: list[HybridResult], paper_titles: dict[int, str] | None = None
+):
+    """
+    Like synthesize_answer, but uses streaming.
+    Yields ('answer_chunk', text) live.
+    Finally yields ('result', SynthesisResult).
+    """
+    if not evidence:
+        res = SynthesisResult(
+            answer="No relevant evidence was found for this question.",
+            claims=[],
+            consensus="INSUFFICIENT_EVIDENCE",
+            uncertainties=["No evidence retrieved from the paper(s) for this query."],
+            evidence_by_label={},
+        )
+        yield ('answer_chunk', res.answer)
+        yield ('result', res)
+        return
+
+    pack_text, evidence_by_label = build_evidence_pack(evidence, paper_titles=paper_titles)
+    user_prompt = f"QUESTION: {query}\n\nEVIDENCE:\n\n{pack_text}"
+
+    from backend.llm.grok_client import stream_grok
+    from backend.llm.stream_parser import parse_answer_stream
+
+    token_stream = stream_grok(SYSTEM_PROMPT, user_prompt, max_tokens=2500, temperature=0.2)
+    parser = parse_answer_stream(token_stream)
+    
+    full_json_str = None
+    for event_type, data in parser:
+        if event_type == 'answer_chunk':
+            yield ('answer_chunk', data)
+        elif event_type == 'full_json':
+            full_json_str = data
+            
+    if not full_json_str:
+        raise ValueError("Failed to get response from Grok.")
+
+    try:
+        parsed = _extract_json(full_json_str)
+    except json.JSONDecodeError as e:
+        raise ValueError(
+            f"Grok did not return valid JSON. Raw response was:\n{full_json_str}"
+        ) from e
+
+    claims = [
+        Claim(id=c.get("id", f"C{i:02d}"), text=c["text"], citation_labels=c.get("citations", []))
+        for i, c in enumerate(parsed.get("claims", []), start=1)
+    ]
+
+    res = SynthesisResult(
+        answer=parsed.get("answer", ""),
+        claims=claims,
+        consensus=parsed.get("consensus", "INSUFFICIENT_EVIDENCE"),
+        uncertainties=parsed.get("uncertainties", []),
+        evidence_by_label=evidence_by_label,
+    )
+    yield ('result', res)

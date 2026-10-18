@@ -154,7 +154,7 @@ def run_benchmark():
     print(f"Recall (SUPPORT)      : {recall * 100:.1f}%")
     print(f"F1 Score (SUPPORT)    : {f1 * 100:.1f}%\n")
     
-    print("Confusion Matrix (Gold -> Predicted):")
+    print("Confusion Matrix (Given -> Predicted):")
     for (g, p), count in sorted(confusion_matrix.items()):
         print(f"  {g} -> {p}: {count}")
 

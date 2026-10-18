@@ -19,6 +19,8 @@ write-up, findings, and the accuracy-improvement methodology (Fixes 1-3).
 - Baseline system: a simple RAG pipeline for side-by-side comparison
 - Evaluation script: runs shared questions through both systems and
   reports latency, keyword recall, and citation health
+- SciFact benchmark: external validation of the NLI claim-verification
+  module against a standard scientific fact-verification dataset
 
 ---
 
@@ -156,6 +158,38 @@ validity naturally varies by 10-15 points run-to-run due to LLM
 non-determinism - for an honest number, run it 3-5 times and average,
 rather than trusting a single run.
 
+### SciFact benchmark
+Independently checks the NLI model (the Fix 3 DeBERTa-v3-large verifier,
+with sentence selection enabled) against the SciFact dev set - a
+published scientific claim-verification benchmark - rather than relying
+only on the system's own citation-validity metric.
+```
+python evaluation/scifact_benchmark.py
+```
+No database, Groq API key, or quota is needed; the ~3MB dataset
+downloads automatically to `evaluation/scifact_data/` on first run. A
+100-pair random subset of the 338-pair dev set is evaluated (seed 42)
+in roughly 2 minutes on CPU.
+
+Results (100-pair subset):
+| Metric | Score |
+|---|---|
+| Accuracy | 58.0% |
+| Precision (SUPPORT) | 100.0% |
+| Recall (SUPPORT) | 46.3% |
+| F1 Score (SUPPORT) | 63.3% |
+
+How to read these numbers: SciFact's gold labels here are binary
+(SUPPORTED / REFUTED), but our model answers three-way and may abstain
+with NOT_ENOUGH_INFO when evidence is inconclusive. Those abstentions
+(40 of 100 pairs) are counted as wrong in the accuracy figure, which is
+why accuracy is low. On decisive predictions only (the 60 pairs where it
+committed to SUPPORT or CONTRADICT), the model was 96.7% accurate, and
+it endorsed a refuted claim as supported 0 times out of 100. This is the
+same conservative behavior seen in the app: it abstains rather than
+over-claim, which is exactly why FLAGGED claims usually mean "worth a
+manual check," not "wrong."
+
 ### Debugging tools
 Standalone scripts used during development, kept for reference:
 ```
@@ -202,6 +236,13 @@ All numbers above are multi-run averages, not single best-case results.
 See the full report document for detailed methodology and evidence
 behind each change.
 
+The Fix 3 NLI model was also validated externally on the SciFact
+benchmark (see "SciFact benchmark" above): on a 100-pair subset of its
+dev set, precision for SUPPORT was 100% with 0 false endorsements of
+refuted claims, corroborating the internal citation-validity gains with
+a standard published fact-verification dataset, not just our own
+end-to-end metric.
+
 ---
 
 ## Known limitations (see full report for details)
@@ -209,7 +250,10 @@ behind each change.
 - Citation verification is conservative, especially for claims that
   combine multiple facts in one sentence (common in LLM-generated answers
   and cross-paper comparisons). A FLAGGED claim often means "unconfirmed,"
-  not "wrong."
+  not "wrong." The SciFact benchmark quantifies this: recall for
+  SUPPORTED claims was only 46.3% (34 of 67 supported pairs were
+  abstained on rather than confirmed), confirming the verifier is tuned
+  to avoid false positives at the cost of missing some true claims.
 - Run-to-run variance of 10-15 points is normal even with zero code
   changes, due to LLM non-determinism affecting exact claim phrasing.
 - Multi-paper queries don't apply the subject-name pronoun-resolution
@@ -240,6 +284,6 @@ project/
     verification/      - consensus + citation verification (incl. joint checking)
     database/          - schema, models, migrations
   frontend/            - index.html, app.js, style.css (served by FastAPI)
-  evaluation/          - comparison script
+  evaluation/          - comparison script + SciFact NLI benchmark
   diagnose_nli.py, diagnose_nli_fix3.py, debug_chunk_nli.py - debugging tools
 ```
